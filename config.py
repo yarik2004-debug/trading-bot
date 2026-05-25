@@ -55,10 +55,10 @@ EXCHANGES = {
 ANALYSIS = {
     # Минимальный объём чтобы считать уровень "крупным" (в USDT)
     "min_big_volume": {
-    "BTC/USDT": 100_000,   
-    "ETH/USDT":  50_000,   
+    "BTC/USDT": 300_000,   
+    "ETH/USDT":  100_000,   
     "SOL/USDT":  10_000,   
-    "BNB/USDT":  10_000,   
+    "BNB/USDT":  50_000,   
     "XRP/USDT":   5_000,   
 },
 
