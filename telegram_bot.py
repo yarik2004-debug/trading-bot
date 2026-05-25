@@ -41,85 +41,36 @@ def build_signal_message(signal: dict) -> str:
     target       = signal["target_level"]
     bid_clusters = signal.get("bid_clusters", [])
     ask_clusters = signal.get("ask_clusters", [])
-    big_bids     = signal["big_bids"]
-    big_asks     = signal["big_asks"]
     ts           = signal["timestamp"].strftime("%H:%M:%S")
 
-    if direction == "up":
-        dir_icon = "🟢"
-        dir_text = "ВВЕРХ ↑"
-        dir_emoji = "📈"
-    else:
-        dir_icon = "🔴"
-        dir_text = "ВНИЗ ↓"
-        dir_emoji = "📉"
+    dir_icon  = "🟢" if direction == "up" else "🔴"
+    dir_text  = "ВВЕРХ ↑" if direction == "up" else "ВНИЗ ↓"
+    dir_emoji = "📈" if direction == "up" else "📉"
 
     lines = []
     lines.append(f"{dir_icon} {level} СИГНАЛ {dir_emoji}")
-    lines.append(f"{'─' * 28}")
-    lines.append(f"💎 Монета:  <b>{symbol}</b>")
-    lines.append(f"📍 Цена:    <b>{format_price(price, symbol)}</b>")
-    lines.append(f"🎯 Сигнал: <b>{dir_text}</b>")
+    lines.append(f"{'─' * 24}")
+    lines.append(f"💎 <b>{symbol}</b> | {format_price(price, symbol)}")
+    lines.append(f"🎯 <b>{dir_text}</b> | {confirmed}/{total} бирж")
     lines.append("")
 
-    # Подтверждения бирж
-    lines.append(f"🏦 <b>Подтверждение бирж:</b>")
-    for r in signal["exchange_results"]:
-        dv = r["direction"]
-        icon = "🟢" if dv == "up" else "🔴" if dv == "down" else "⚪"
-        arrow = "↑" if dv == "up" else "↓" if dv == "down" else "—"
-        lines.append(f"  {icon} {r['exchange'].capitalize()}: {arrow}")
-    lines.append(f"  ✅ Согласны: {confirmed}/{total} бирж")
-    lines.append("")
-
-    # Кластеры покупок
+    # Кластеры покупок — максимум 2
     if bid_clusters:
-        lines.append(f"🟢 <b>Кластеры покупок (зоны поддержки):</b>")
-        for c in bid_clusters[:3]:
-            lines.append(
-                f"  🔵 {format_price(c['price'], symbol)} "
-                f"— {format_number(c['volume_usdt'])} USDT "
-                f"({c['distance_pct']}% от цены)"
-            )
-        lines.append("")
-    elif big_bids:
-        lines.append(f"🟢 <b>Крупные покупки:</b>")
-        for b in big_bids[:3]:
-            lines.append(
-                f"  📦 {format_price(b['price'], symbol)} "
-                f"— {format_number(b['volume_usdt'])} USDT "
-                f"({b['distance_pct']}% от цены)"
-            )
-        lines.append("")
+        lines.append(f"🟢 <b>Зоны покупок:</b>")
+        for c in bid_clusters[:2]:
+            lines.append(f"  {format_price(c['price'], symbol)} — {format_number(c['volume_usdt'])} USDT ({c['distance_pct']}%)")
+    lines.append("")
 
-    # Кластеры продаж
+    # Кластеры продаж — максимум 2
     if ask_clusters:
-        lines.append(f"🔴 <b>Кластеры продаж (зоны сопротивления):</b>")
-        for c in ask_clusters[:3]:
-            lines.append(
-                f"  🔵 {format_price(c['price'], symbol)} "
-                f"— {format_number(c['volume_usdt'])} USDT "
-                f"({c['distance_pct']}% от цены)"
-            )
-        lines.append("")
-    elif big_asks:
-        lines.append(f"🔴 <b>Крупные продажи:</b>")
-        for a in big_asks[:3]:
-            lines.append(
-                f"  📦 {format_price(a['price'], symbol)} "
-                f"— {format_number(a['volume_usdt'])} USDT "
-                f"({a['distance_pct']}% от цены)"
-            )
-        lines.append("")
+        lines.append(f"🔴 <b>Зоны продаж:</b>")
+        for c in ask_clusters[:2]:
+            lines.append(f"  {format_price(c['price'], symbol)} — {format_number(c['volume_usdt'])} USDT ({c['distance_pct']}%)")
+    lines.append("")
 
     # Цель
     if target:
-        lines.append(f"🎯 <b>Цель движения:</b>")
-        lines.append(
-            f"  {format_price(target['price'], symbol)} "
-            f"({format_number(target['volume_usdt'])} USDT, "
-            f"{target['distance_pct']}% от цены)"
-        )
+        lines.append(f"🎯 Цель: <b>{format_price(target['price'], symbol)}</b> ({format_number(target['volume_usdt'])} USDT)")
         lines.append("")
 
     # Дисбаланс
@@ -129,18 +80,20 @@ def build_signal_message(signal: dict) -> str:
         avg_ask = sum(i["ask_pct"] for i in imb_list) / len(imb_list)
         filled  = int(avg_bid / 10)
         bar     = "🟩" * filled + "🟥" * (10 - filled)
-        lines.append(f"⚖️ <b>Дисбаланс стакана:</b>")
-        lines.append(f"  {bar}")
-        lines.append(f"  🟢 Покупки: {avg_bid:.1f}%  🔴 Продажи: {avg_ask:.1f}%")
+        lines.append(f"⚖️ {bar}")
+        lines.append(f"🟢 {avg_bid:.1f}%  🔴 {avg_ask:.1f}%")
         lines.append("")
 
-    lines.append(f"{'─' * 28}")
-    lines.append(f"🕐 {ts}  |  ⚠️ <i>Не является финансовым советом</i>")
+    lines.append(f"🕐 {ts} | ⚠️ <i>Не фин. совет</i>")
 
     return "\n".join(lines)
 
 
 async def send_message(text: str) -> bool:
+    # Обрезаем если слишком длинное
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id":    TELEGRAM_CHAT_ID,
@@ -164,15 +117,10 @@ async def send_startup_message():
     text = (
         "🤖 <b>Трейдинг-бот запущен!</b>\n"
         "─────────────────────────\n"
-        "📊 Мониторю монеты:\n"
-        "  • BTC/USDT\n"
-        "  • ETH/USDT\n"
-        "  • SOL/USDT\n"
-        "  • BNB/USDT\n"
-        "  • XRP/USDT\n\n"
-        "🏦 Биржи: Binance, Bybit, OKX\n"
-        f"⏱ Анализ каждые {ANALYSIS['analyze_interval']} секунд\n"
-        f"🔍 Радиус поиска: {ANALYSIS.get('max_distance_pct', 5)}% от цены\n"
+        "📊 BTC | ETH | SOL | BNB | XRP\n"
+        "🏦 Binance | Bybit | OKX\n"
+        f"⏱ Анализ каждые {ANALYSIS['analyze_interval']}с\n"
+        f"🔍 Радиус: {ANALYSIS.get('max_distance_pct', 5)}% от цены\n"
         "─────────────────────────\n"
         "Ищу кластеры ликвидности... 👀"
     )
@@ -180,24 +128,29 @@ async def send_startup_message():
 
 
 async def send_error_message(error: str):
-    await send_message(f"⚠️ <b>Ошибка:</b>\n<code>{error}</code>")
+    await send_message(f"⚠️ <b>Ошибка:</b>\n<code>{error[:200]}</code>")
 
 
 async def process_signal(signal: dict) -> bool:
-    symbol   = signal["symbol"]
-    cooldown = timedelta(minutes=ANALYSIS["signal_cooldown_minutes"])
-    now      = datetime.now()
+    symbol    = signal["symbol"]
+    direction = signal["direction"]
+    cooldown  = timedelta(minutes=ANALYSIS["signal_cooldown_minutes"])
+    now       = datetime.now()
 
-    if symbol in last_signal_time:
-        if now - last_signal_time[symbol] < cooldown:
+    # Кулдаун по символу И направлению
+    key = f"{symbol}_{direction}"
+    if key in last_signal_time:
+        if now - last_signal_time[key] < cooldown:
+            remaining = int((cooldown - (now - last_signal_time[key])).total_seconds() / 60)
+            log.debug(f"{symbol}: кулдаун {remaining} мин.")
             return False
 
     message = build_signal_message(signal)
     success = await send_message(message)
 
     if success:
-        last_signal_time[symbol] = now
-        log.info(f"Сигнал отправлен: {symbol} {signal['direction']}")
+        last_signal_time[key] = now
+        log.info(f"Сигнал отправлен: {symbol} {direction}")
 
     return success
 
