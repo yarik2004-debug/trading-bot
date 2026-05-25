@@ -1,5 +1,5 @@
 # ============================================
-#   TELEGRAM БОТ — ОТПРАВКА СИГНАЛОВ
+#   TELEGRAM БОТ
 # ============================================
 
 import asyncio
@@ -9,17 +9,10 @@ import aiohttp
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ANALYSIS
 
 log = logging.getLogger(__name__)
-
-# Защита от спама — запоминаем когда последний раз слали сигнал по монете
 last_signal_time = {}
 
 
-# ============================================
-#   ФОРМАТИРОВАНИЕ СООБЩЕНИЙ
-# ============================================
-
 def format_number(num: float) -> str:
-    """Красивый формат числа: 1234567 → 1,234,567"""
     if num >= 1_000_000:
         return f"{num/1_000_000:.2f}M"
     elif num >= 1_000:
@@ -28,7 +21,6 @@ def format_number(num: float) -> str:
 
 
 def format_price(price: float, symbol: str) -> str:
-    """Форматируем цену в зависимости от монеты"""
     if "BTC" in symbol:
         return f"${price:,.2f}"
     elif price >= 100:
@@ -36,119 +28,119 @@ def format_price(price: float, symbol: str) -> str:
     elif price >= 1:
         return f"${price:,.4f}"
     else:
-        return f"${price:,.6f}"
+        return f"${price:,.5f}"
 
 
 def build_signal_message(signal: dict) -> str:
-    """
-    Строим красивое сообщение для Telegram.
-    """
-    symbol    = signal["symbol"]
-    direction = signal["direction"]
-    level     = signal["level_label"]
-    price     = signal["avg_price"]
-    confirmed = signal["confirmed_by"]
-    total     = signal["total_exchanges"]
-    target    = signal["target_level"]
-    big_bids  = signal["big_bids"]
-    big_asks  = signal["big_asks"]
-    votes     = signal["votes"]
-    ts        = signal["timestamp"].strftime("%H:%M:%S")
+    symbol       = signal["symbol"]
+    direction    = signal["direction"]
+    level        = signal["level_label"]
+    price        = signal["avg_price"]
+    confirmed    = signal["confirmed_by"]
+    total        = signal["total_exchanges"]
+    target       = signal["target_level"]
+    bid_clusters = signal.get("bid_clusters", [])
+    ask_clusters = signal.get("ask_clusters", [])
+    big_bids     = signal["big_bids"]
+    big_asks     = signal["big_asks"]
+    ts           = signal["timestamp"].strftime("%H:%M:%S")
 
-    # Иконки направления
     if direction == "up":
-        dir_icon  = "🟢"
-        dir_text  = "ВВЕРХ ↑"
+        dir_icon = "🟢"
+        dir_text = "ВВЕРХ ↑"
         dir_emoji = "📈"
     else:
-        dir_icon  = "🔴"
-        dir_text  = "ВНИЗ ↓"
+        dir_icon = "🔴"
+        dir_text = "ВНИЗ ↓"
         dir_emoji = "📉"
 
     lines = []
-
-    # --- Заголовок ---
     lines.append(f"{dir_icon} {level} СИГНАЛ {dir_emoji}")
     lines.append(f"{'─' * 28}")
     lines.append(f"💎 Монета:  <b>{symbol}</b>")
     lines.append(f"📍 Цена:    <b>{format_price(price, symbol)}</b>")
     lines.append(f"🎯 Сигнал: <b>{dir_text}</b>")
-    lines.append(f"")
+    lines.append("")
 
-    # --- Подтверждения бирж ---
+    # Подтверждения бирж
     lines.append(f"🏦 <b>Подтверждение бирж:</b>")
-    exchange_names = {
-        r["exchange"]: r["direction"]
-        for r in signal["exchange_results"]
-    }
-    for exch, direction_vote in exchange_names.items():
-        if direction_vote == "up":
-            icon = "🟢"
-        elif direction_vote == "down":
-            icon = "🔴"
-        else:
-            icon = "⚪"
-        lines.append(f"  {icon} {exch.capitalize()}: {'↑' if direction_vote == 'up' else '↓' if direction_vote == 'down' else '—'}")
+    for r in signal["exchange_results"]:
+        dv = r["direction"]
+        icon = "🟢" if dv == "up" else "🔴" if dv == "down" else "⚪"
+        arrow = "↑" if dv == "up" else "↓" if dv == "down" else "—"
+        lines.append(f"  {icon} {r['exchange'].capitalize()}: {arrow}")
     lines.append(f"  ✅ Согласны: {confirmed}/{total} бирж")
-    lines.append(f"")
+    lines.append("")
 
-    # --- Крупные блоки покупок ---
-    if big_bids:
-        lines.append(f"🟢 <b>Крупные покупки (поддержка):</b>")
+    # Кластеры покупок
+    if bid_clusters:
+        lines.append(f"🟢 <b>Кластеры покупок (зоны поддержки):</b>")
+        for c in bid_clusters[:3]:
+            lines.append(
+                f"  🔵 {format_price(c['price'], symbol)} "
+                f"— {format_number(c['volume_usdt'])} USDT "
+                f"({c['distance_pct']}% от цены)"
+            )
+        lines.append("")
+    elif big_bids:
+        lines.append(f"🟢 <b>Крупные покупки:</b>")
         for b in big_bids[:3]:
             lines.append(
                 f"  📦 {format_price(b['price'], symbol)} "
                 f"— {format_number(b['volume_usdt'])} USDT "
                 f"({b['distance_pct']}% от цены)"
             )
-        lines.append(f"")
+        lines.append("")
 
-    # --- Крупные блоки продаж ---
-    if big_asks:
-        lines.append(f"🔴 <b>Крупные продажи (сопротивление):</b>")
+    # Кластеры продаж
+    if ask_clusters:
+        lines.append(f"🔴 <b>Кластеры продаж (зоны сопротивления):</b>")
+        for c in ask_clusters[:3]:
+            lines.append(
+                f"  🔵 {format_price(c['price'], symbol)} "
+                f"— {format_number(c['volume_usdt'])} USDT "
+                f"({c['distance_pct']}% от цены)"
+            )
+        lines.append("")
+    elif big_asks:
+        lines.append(f"🔴 <b>Крупные продажи:</b>")
         for a in big_asks[:3]:
             lines.append(
                 f"  📦 {format_price(a['price'], symbol)} "
                 f"— {format_number(a['volume_usdt'])} USDT "
                 f"({a['distance_pct']}% от цены)"
             )
-        lines.append(f"")
+        lines.append("")
 
-    # --- Целевой уровень ---
+    # Цель
     if target:
         lines.append(f"🎯 <b>Цель движения:</b>")
         lines.append(
             f"  {format_price(target['price'], symbol)} "
-            f"({format_number(target['volume_usdt'])} USDT)"
+            f"({format_number(target['volume_usdt'])} USDT, "
+            f"{target['distance_pct']}% от цены)"
         )
-        lines.append(f"")
+        lines.append("")
 
-    # --- Дисбаланс стакана ---
+    # Дисбаланс
     imb_list = [r["imbalance"] for r in signal["exchange_results"]]
     if imb_list:
-        avg_bid_pct = sum(i["bid_pct"] for i in imb_list) / len(imb_list)
-        avg_ask_pct = sum(i["ask_pct"] for i in imb_list) / len(imb_list)
-        bar_filled  = int(avg_bid_pct / 10)
-        bar_empty   = 10 - bar_filled
-        bar         = "🟩" * bar_filled + "🟥" * bar_empty
+        avg_bid = sum(i["bid_pct"] for i in imb_list) / len(imb_list)
+        avg_ask = sum(i["ask_pct"] for i in imb_list) / len(imb_list)
+        filled  = int(avg_bid / 10)
+        bar     = "🟩" * filled + "🟥" * (10 - filled)
         lines.append(f"⚖️ <b>Дисбаланс стакана:</b>")
         lines.append(f"  {bar}")
-        lines.append(f"  🟢 Покупки: {avg_bid_pct:.1f}%  🔴 Продажи: {avg_ask_pct:.1f}%")
-        lines.append(f"")
+        lines.append(f"  🟢 Покупки: {avg_bid:.1f}%  🔴 Продажи: {avg_ask:.1f}%")
+        lines.append("")
 
-    # --- Подвал ---
     lines.append(f"{'─' * 28}")
     lines.append(f"🕐 {ts}  |  ⚠️ <i>Не является финансовым советом</i>")
 
     return "\n".join(lines)
 
 
-# ============================================
-#   ОТПРАВКА В TELEGRAM
-# ============================================
-
 async def send_message(text: str) -> bool:
-    """Отправляет сообщение в Telegram через HTTP API"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id":    TELEGRAM_CHAT_ID,
@@ -160,17 +152,15 @@ async def send_message(text: str) -> bool:
             async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     return True
-                else:
-                    body = await resp.text()
-                    log.error(f"Telegram ошибка {resp.status}: {body}")
-                    return False
+                body = await resp.text()
+                log.error(f"Telegram ошибка {resp.status}: {body}")
+                return False
     except Exception as e:
         log.error(f"Ошибка отправки в Telegram: {e}")
         return False
 
 
 async def send_startup_message():
-    """Сообщение при запуске бота"""
     text = (
         "🤖 <b>Трейдинг-бот запущен!</b>\n"
         "─────────────────────────\n"
@@ -182,41 +172,26 @@ async def send_startup_message():
         "  • XRP/USDT\n\n"
         "🏦 Биржи: Binance, Bybit, OKX\n"
         f"⏱ Анализ каждые {ANALYSIS['analyze_interval']} секунд\n"
-        f"✅ Минимум подтверждений: {ANALYSIS['min_exchanges_confirm']} биржи\n"
+        f"🔍 Радиус поиска: {ANALYSIS.get('max_distance_pct', 5)}% от цены\n"
         "─────────────────────────\n"
-        "Жду крупных блоков ликвидности... 👀"
+        "Ищу кластеры ликвидности... 👀"
     )
     await send_message(text)
 
 
 async def send_error_message(error: str):
-    """Сообщение об ошибке"""
-    text = f"⚠️ <b>Ошибка бота:</b>\n<code>{error}</code>"
-    await send_message(text)
+    await send_message(f"⚠️ <b>Ошибка:</b>\n<code>{error}</code>")
 
-
-# ============================================
-#   ПРОВЕРКА КУЛДАУНА И ОТПРАВКА СИГНАЛА
-# ============================================
 
 async def process_signal(signal: dict) -> bool:
-    """
-    Проверяет кулдаун и отправляет сигнал если прошло достаточно времени.
-    Возвращает True если сигнал был отправлен.
-    """
     symbol   = signal["symbol"]
     cooldown = timedelta(minutes=ANALYSIS["signal_cooldown_minutes"])
     now      = datetime.now()
 
-    # Проверяем кулдаун
     if symbol in last_signal_time:
-        elapsed = now - last_signal_time[symbol]
-        if elapsed < cooldown:
-            remaining = (cooldown - elapsed).seconds // 60
-            log.debug(f"{symbol}: кулдаун, ещё {remaining} мин.")
+        if now - last_signal_time[symbol] < cooldown:
             return False
 
-    # Формируем и отправляем сообщение
     message = build_signal_message(signal)
     success = await send_message(message)
 
@@ -228,7 +203,6 @@ async def process_signal(signal: dict) -> bool:
 
 
 async def process_signals(signals: list):
-    """Обрабатывает список сигналов"""
     for signal in signals:
         await process_signal(signal)
-        await asyncio.sleep(0.5)  # небольшая пауза между сообщениями
+        await asyncio.sleep(0.5)

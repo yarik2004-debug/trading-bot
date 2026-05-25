@@ -9,7 +9,7 @@ from config import SYMBOLS, ANALYSIS, SIGNAL_LEVELS
 log = logging.getLogger(__name__)
 
 
-def get_top_levels(orders: dict, side: str, depth: int = 10) -> list:
+def get_top_levels(orders: dict, side: str, depth: int = 20) -> list:
     reverse = (side == "bids")
     sorted_levels = sorted(orders.items(), key=lambda x: x[0], reverse=reverse)
     return sorted_levels[:depth]
@@ -20,13 +20,23 @@ def calc_volume_usdt(price: float, qty: float) -> float:
 
 
 def find_big_blocks(orders: dict, side: str, symbol: str, current_price: float) -> list:
+    """
+    Ищет крупные блоки по ВСЕМУ стакану без ограничения дистанции.
+    Группирует близкие уровни в кластеры.
+    """
     min_vol = ANALYSIS["min_big_volume"][symbol]
+    max_dist = ANALYSIS.get("max_distance_pct", 5.0)
     big_blocks = []
 
     for price, qty in orders.items():
         volume_usdt = calc_volume_usdt(price, qty)
+        distance_pct = abs(price - current_price) / current_price * 100
+
+        # Ищем блоки в радиусе max_distance_pct от цены
+        if distance_pct > max_dist:
+            continue
+
         if volume_usdt >= min_vol:
-            distance_pct = abs(price - current_price) / current_price * 100
             big_blocks.append({
                 "price":        price,
                 "qty":          qty,
@@ -39,9 +49,67 @@ def find_big_blocks(orders: dict, side: str, symbol: str, current_price: float) 
     return big_blocks
 
 
-def calc_imbalance(bids: dict, asks: dict, depth: int = 20) -> dict:
-    top_bids = get_top_levels(bids, "bids", depth)
-    top_asks = get_top_levels(asks, "asks", depth)
+def find_clusters(orders: dict, side: str, symbol: str, current_price: float) -> list:
+    """
+    Группирует уровни в кластеры — зоны где скопилось много объёма.
+    Кластер = группа уровней в радиусе 0.3% друг от друга.
+    """
+    min_vol   = ANALYSIS["min_big_volume"][symbol]
+    max_dist  = ANALYSIS.get("max_distance_pct", 5.0)
+    cluster_r = 0.003  # 0.3% — радиус кластера
+
+    # Фильтруем уровни по дистанции
+    levels = []
+    for price, qty in orders.items():
+        dist = abs(price - current_price) / current_price * 100
+        if dist <= max_dist:
+            levels.append((price, qty, price * qty))
+
+    if not levels:
+        return []
+
+    # Сортируем по цене
+    reverse = (side == "bids")
+    levels.sort(key=lambda x: x[0], reverse=reverse)
+
+    # Группируем в кластеры
+    clusters = []
+    used = set()
+
+    for i, (price, qty, vol) in enumerate(levels):
+        if i in used:
+            continue
+
+        cluster_vol   = vol
+        cluster_prices = [price]
+        used.add(i)
+
+        for j, (price2, qty2, vol2) in enumerate(levels):
+            if j in used:
+                continue
+            if abs(price - price2) / price <= cluster_r:
+                cluster_vol += vol2
+                cluster_prices.append(price2)
+                used.add(j)
+
+        if cluster_vol >= min_vol:
+            avg_price = sum(cluster_prices) / len(cluster_prices)
+            dist = abs(avg_price - current_price) / current_price * 100
+            clusters.append({
+                "price":        round(avg_price, 6),
+                "volume_usdt":  cluster_vol,
+                "side":         side,
+                "distance_pct": round(dist, 2),
+                "levels_count": len(cluster_prices),
+            })
+
+    clusters.sort(key=lambda x: x["volume_usdt"], reverse=True)
+    return clusters
+
+
+def calc_imbalance(bids: dict, asks: dict, depth: int = 50) -> dict:
+    top_bids = sorted(bids.items(), key=lambda x: x[0], reverse=True)[:depth]
+    top_asks = sorted(asks.items(), key=lambda x: x[0])[:depth]
 
     bid_volume = sum(p * q for p, q in top_bids)
     ask_volume = sum(p * q for p, q in top_asks)
@@ -54,10 +122,10 @@ def calc_imbalance(bids: dict, asks: dict, depth: int = 20) -> dict:
     ask_pct = ask_volume / total * 100
 
     if bid_volume > ask_volume:
-        ratio = bid_volume / ask_volume if ask_volume > 0 else 999
+        ratio    = bid_volume / ask_volume if ask_volume > 0 else 999
         dominant = "bids"
     else:
-        ratio = ask_volume / bid_volume if bid_volume > 0 else 999
+        ratio    = ask_volume / bid_volume if bid_volume > 0 else 999
         dominant = "asks"
 
     return {
@@ -79,8 +147,8 @@ def get_current_price(bids: dict, asks: dict) -> float:
 
 
 def analyze_exchange(symbol: str, exchange: str, ob: dict):
-    bids = ob.get("bids", {})
-    asks = ob.get("asks", {})
+    bids    = ob.get("bids", {})
+    asks    = ob.get("asks", {})
     updated = ob.get("updated")
 
     if not bids or not asks or not updated:
@@ -95,29 +163,34 @@ def analyze_exchange(symbol: str, exchange: str, ob: dict):
     if current_price == 0:
         return None
 
+    # Отдельные блоки
     big_bids = find_big_blocks(bids, "bids", symbol, current_price)
     big_asks = find_big_blocks(asks, "asks", symbol, current_price)
+
+    # Кластеры ликвидности
+    bid_clusters = find_clusters(bids, "bids", symbol, current_price)
+    ask_clusters = find_clusters(asks, "asks", symbol, current_price)
+
     imbalance = calc_imbalance(bids, asks)
 
-    ratio = ANALYSIS["imbalance_ratio"]
+    ratio     = ANALYSIS["imbalance_ratio"]
     direction = "neutral"
 
-    # ИСПРАВЛЕННАЯ ЛОГИКА:
-    # Много покупок (bids) → давление вверх → цена идёт ВВЕРХ
-    # Много продаж (asks) → давление вниз → цена идёт ВНИЗ
     if imbalance["dominant"] == "bids" and imbalance["ratio"] >= ratio:
         direction = "up"
     elif imbalance["dominant"] == "asks" and imbalance["ratio"] >= ratio:
         direction = "down"
 
     return {
-        "exchange":  exchange,
-        "symbol":    symbol,
-        "price":     current_price,
-        "big_bids":  big_bids[:3],
-        "big_asks":  big_asks[:3],
-        "imbalance": imbalance,
-        "direction": direction,
+        "exchange":     exchange,
+        "symbol":       symbol,
+        "price":        current_price,
+        "big_bids":     big_bids[:5],
+        "big_asks":     big_asks[:5],
+        "bid_clusters": bid_clusters[:3],
+        "ask_clusters": ask_clusters[:3],
+        "imbalance":    imbalance,
+        "direction":    direction,
     }
 
 
@@ -134,36 +207,39 @@ def aggregate_signal(symbol: str, exchange_results: list):
 
     if votes["up"] >= min_confirm:
         final_direction = "up"
-        confirmed_by = votes["up"]
+        confirmed_by    = votes["up"]
     elif votes["down"] >= min_confirm:
         final_direction = "down"
-        confirmed_by = votes["down"]
+        confirmed_by    = votes["down"]
     else:
         return None
 
-    if confirmed_by >= 3:
-        level = "strong"
-    elif confirmed_by == 2:
-        level = "medium"
-    else:
-        level = "weak"
+    level = "strong" if confirmed_by >= 3 else "medium" if confirmed_by == 2 else "weak"
 
     avg_price = sum(r["price"] for r in valid) / len(valid)
 
-    all_big_bids = []
-    all_big_asks = []
+    all_big_bids     = []
+    all_big_asks     = []
+    all_bid_clusters = []
+    all_ask_clusters = []
+
     for r in valid:
         all_big_bids.extend(r["big_bids"])
         all_big_asks.extend(r["big_asks"])
+        all_bid_clusters.extend(r["bid_clusters"])
+        all_ask_clusters.extend(r["ask_clusters"])
 
     all_big_bids.sort(key=lambda x: x["volume_usdt"], reverse=True)
     all_big_asks.sort(key=lambda x: x["volume_usdt"], reverse=True)
+    all_bid_clusters.sort(key=lambda x: x["volume_usdt"], reverse=True)
+    all_ask_clusters.sort(key=lambda x: x["volume_usdt"], reverse=True)
 
+    # Цель — ближайший крупный кластер в направлении движения
     target_level = None
-    if final_direction == "down" and all_big_bids:
-        target_level = all_big_bids[0]
-    elif final_direction == "up" and all_big_asks:
-        target_level = all_big_asks[0]
+    if final_direction == "down":
+        target_level = all_bid_clusters[0] if all_bid_clusters else (all_big_bids[0] if all_big_bids else None)
+    elif final_direction == "up":
+        target_level = all_ask_clusters[0] if all_ask_clusters else (all_big_asks[0] if all_big_asks else None)
 
     return {
         "symbol":           symbol,
@@ -172,10 +248,12 @@ def aggregate_signal(symbol: str, exchange_results: list):
         "level_label":      SIGNAL_LEVELS[level],
         "confirmed_by":     confirmed_by,
         "total_exchanges":  len(valid),
-        "avg_price":        round(avg_price, 4),
+        "avg_price":        round(avg_price, 6),
         "target_level":     target_level,
         "big_bids":         all_big_bids[:3],
         "big_asks":         all_big_asks[:3],
+        "bid_clusters":     all_bid_clusters[:3],
+        "ask_clusters":     all_ask_clusters[:3],
         "exchange_results": valid,
         "votes":            votes,
         "timestamp":        datetime.now(),
@@ -187,18 +265,16 @@ def run_analysis(orderbooks: dict) -> list:
 
     for symbol in SYMBOLS:
         exchange_results = []
-
         for exchange, ob in orderbooks.get(symbol, {}).items():
             result = analyze_exchange(symbol, exchange, ob)
             exchange_results.append(result)
 
         signal = aggregate_signal(symbol, exchange_results)
-
         if signal:
             log.info(
                 f"СИГНАЛ {signal['level_label']} | {symbol} | "
                 f"{'ВВЕРХ ↑' if signal['direction'] == 'up' else 'ВНИЗ ↓'} | "
-                f"подтверждено {signal['confirmed_by']}/{signal['total_exchanges']} бирж"
+                f"{signal['confirmed_by']}/{signal['total_exchanges']} бирж"
             )
             signals.append(signal)
         else:
