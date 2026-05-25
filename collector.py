@@ -22,7 +22,6 @@ for symbol in SYMBOLS:
 #   BINANCE
 # ============================================
 async def connect_binance():
-    # Используем отдельные стримы для каждой монеты через combined stream
     streams = "/".join([f"{cfg['binance']}@depth20@100ms" for cfg in SYMBOLS.values()])
     url = f"wss://stream.binance.com:9443/stream?streams={streams}"
 
@@ -32,28 +31,19 @@ async def connect_binance():
             async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
                 log.info("Binance: подключено ✓")
                 msg_count = 0
-
                 async for raw in ws:
-                    data = json.loads(raw)
-                    stream = data.get("stream", "")
+                    data    = json.loads(raw)
+                    stream  = data.get("stream", "")
                     payload = data.get("data", {})
 
-                    msg_count += 1
-                    if msg_count == 1:
-                        log.info(f"Binance первое сообщение: stream={stream}")
-
-                    # Ищем символ по имени стрима
                     symbol = next(
-                        (sym for sym, cfg in SYMBOLS.items()
-                         if cfg["binance"] in stream),
+                        (sym for sym, cfg in SYMBOLS.items() if cfg["binance"] in stream),
                         None
                     )
                     if not symbol:
                         continue
 
-                    ob = orderbooks[symbol]["binance"]
-
-                    # Binance depth20 возвращает bids/asks как полный снимок
+                    ob   = orderbooks[symbol]["binance"]
                     bids = payload.get("bids", [])
                     asks = payload.get("asks", [])
 
@@ -61,16 +51,15 @@ async def connect_binance():
                         ob["bids"] = {float(p): float(q) for p, q in bids}
                     if asks:
                         ob["asks"] = {float(p): float(q) for p, q in asks}
-
                     if bids or asks:
                         ob["updated"] = datetime.now()
 
-                    if msg_count == 10:
+                    msg_count += 1
+                    if msg_count == 20:
                         for sym in SYMBOLS:
                             b = len(orderbooks[sym]["binance"]["bids"])
                             a = len(orderbooks[sym]["binance"]["asks"])
-                            if b > 0:
-                                log.info(f"Binance {sym}: bids={b} asks={a} ✓")
+                            log.info(f"Binance {sym}: bids={b} asks={a}")
 
         except Exception as e:
             log.error(f"Binance ошибка: {e}. Переподключаемся через 5с...")
@@ -81,7 +70,7 @@ async def connect_binance():
 #   BYBIT
 # ============================================
 async def connect_bybit():
-    url = EXCHANGES["bybit"]["ws_url"]
+    url   = EXCHANGES["bybit"]["ws_url"]
     depth = ANALYSIS["orderbook_depth"]
 
     while True:
@@ -89,13 +78,11 @@ async def connect_bybit():
             log.info("Bybit: подключаемся...")
             async with websockets.connect(url, ping_interval=20) as ws:
                 log.info("Bybit: подключено ✓")
-
                 topics = [f"orderbook.{depth}.{cfg['bybit']}" for cfg in SYMBOLS.values()]
                 await ws.send(json.dumps({"op": "subscribe", "args": topics}))
 
                 async for raw in ws:
-                    data = json.loads(raw)
-
+                    data     = json.loads(raw)
                     if data.get("op") == "subscribe":
                         log.info(f"Bybit подписка: {data.get('success')}")
                         continue
@@ -105,15 +92,13 @@ async def connect_bybit():
                     msg_type = data.get("type", "")
 
                     symbol = next(
-                        (sym for sym, cfg in SYMBOLS.items()
-                         if cfg["bybit"] in topic),
+                        (sym for sym, cfg in SYMBOLS.items() if cfg["bybit"] in topic),
                         None
                     )
                     if not symbol or not payload:
                         continue
 
                     ob = orderbooks[symbol]["bybit"]
-
                     if msg_type == "snapshot":
                         ob["bids"] = {float(p): float(q) for p, q in payload.get("b", [])}
                         ob["asks"] = {float(p): float(q) for p, q in payload.get("a", [])}
@@ -139,11 +124,10 @@ async def connect_bybit():
 
 
 # ============================================
-#   OKX — используем публичный канал books5
+#   OKX — используем бизнес endpoint
 # ============================================
 async def connect_okx():
-    # Публичный endpoint не требует авторизации
-    url = "wss://ws.okx.com:8443/ws/v5/public"
+    url = "wss://wsaws.okx.com:8443/ws/v5/public"  # AWS endpoint без гео-блокировок
 
     while True:
         try:
@@ -151,28 +135,32 @@ async def connect_okx():
             async with websockets.connect(url, ping_interval=20) as ws:
                 log.info("OKX: подключено ✓")
 
-                # books — публичный канал, не требует логина
-                args = [{"channel": "books", "instId": cfg["okx"]}
+                args = [{"channel": "bbo-tbt", "instId": cfg["okx"]}
                         for cfg in SYMBOLS.values()]
                 await ws.send(json.dumps({"op": "subscribe", "args": args}))
-                log.info(f"OKX: подписались на {[a['instId'] for a in args]}")
+                log.info("OKX: подписка отправлена")
+
+                # Также подписываемся на books для глубины
+                args2 = [{"channel": "books5", "instId": cfg["okx"]}
+                         for cfg in SYMBOLS.values()]
+                await ws.send(json.dumps({"op": "subscribe", "args": args2}))
 
                 async for raw in ws:
                     if raw == "ping":
                         await ws.send("pong")
                         continue
 
-                    data = json.loads(raw)
+                    data  = json.loads(raw)
                     event = data.get("event", "")
 
                     if event == "subscribe":
-                        log.info(f"OKX подписка подтверждена ✓")
+                        log.info("OKX подписка подтверждена ✓")
                         continue
                     if event == "error":
                         log.error(f"OKX ошибка: {data.get('msg')} code={data.get('code')}")
                         continue
 
-                    action      = data.get("action", "")
+                    action       = data.get("action", "")
                     payload_list = data.get("data", [])
                     if not payload_list:
                         continue
@@ -181,8 +169,7 @@ async def connect_okx():
                     inst_id = payload.get("instId", "")
 
                     symbol = next(
-                        (sym for sym, cfg in SYMBOLS.items()
-                         if cfg["okx"] == inst_id),
+                        (sym for sym, cfg in SYMBOLS.items() if cfg["okx"] == inst_id),
                         None
                     )
                     if not symbol:
@@ -190,10 +177,17 @@ async def connect_okx():
 
                     ob = orderbooks[symbol]["okx"]
 
-                    if action == "snapshot":
-                        ob["bids"] = {float(p): float(q) for p, q, *_ in payload.get("bids", [])}
-                        ob["asks"] = {float(p): float(q) for p, q, *_ in payload.get("asks", [])}
-                        log.info(f"OKX snapshot {symbol}: bids={len(ob['bids'])} asks={len(ob['asks'])} ✓")
+                    if action in ("snapshot", ""):
+                        bids = payload.get("bids", [])
+                        asks = payload.get("asks", [])
+                        if bids:
+                            ob["bids"] = {float(p): float(q) for p, q, *_ in bids}
+                        if asks:
+                            ob["asks"] = {float(p): float(q) for p, q, *_ in asks}
+                        if bids or asks:
+                            ob["updated"] = datetime.now()
+                            log.info(f"OKX {symbol}: bids={len(ob['bids'])} asks={len(ob['asks'])} ✓")
+
                     elif action == "update":
                         for price, qty, *_ in payload.get("bids", []):
                             price, qty = float(price), float(qty)
@@ -207,8 +201,7 @@ async def connect_okx():
                                 ob["asks"].pop(price, None)
                             else:
                                 ob["asks"][price] = qty
-
-                    ob["updated"] = datetime.now()
+                        ob["updated"] = datetime.now()
 
         except Exception as e:
             log.error(f"OKX ошибка: {e}. Переподключаемся через 5с...")
