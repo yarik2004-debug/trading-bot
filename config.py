@@ -55,10 +55,10 @@ EXCHANGES = {
 ANALYSIS = {
     # Минимальный объём чтобы считать уровень "крупным" (в USDT)
     "min_big_volume": {
-    "BTC/USDT": 100_000,   
-    "ETH/USDT":  50_000,   
-    "SOL/USDT":  25_000,   
-    "BNB/USDT":  10_000,   
+    "BTC/USDT": 80_000,   
+    "ETH/USDT":  20_000,   
+    "SOL/USDT":  80_000,   
+    "BNB/USDT":  20_000,   
     "XRP/USDT":   5_000,   
 },
 
@@ -70,7 +70,7 @@ ANALYSIS = {
     "imbalance_ratio": 1.6,
 
     # Минимум бирж которые должны подтвердить сигнал
-    "min_exchanges_confirm": 2,
+    "min_exchanges_confirm": 1,
 
     # Как часто анализировать (в секундах)
     "analyze_interval": 60,
