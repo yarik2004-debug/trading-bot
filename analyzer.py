@@ -135,12 +135,12 @@ def analyze_exchange(symbol: str, exchange: str, ob: dict) -> dict | None:
     ratio = ANALYSIS["imbalance_ratio"]
     direction = "neutral"
 
-    if imbalance["dominant"] == "bids" and imbalance["ratio"] >= ratio:
-        # Много покупок снизу → цена может пойти ВНИЗ (снять ликвидность)
-        direction = "down"
-    elif imbalance["dominant"] == "asks" and imbalance["ratio"] >= ratio:
-        # Много продаж сверху → цена может пойти ВВЕРХ (снять ликвидность)
-        direction = "up"
+    if imbalance["dominant"] == "asks" and imbalance["ratio"] >= ratio:
+    # Много продаж сверху → цена пойдёт ВНИЗ
+    direction = "down"
+elif imbalance["dominant"] == "bids" and imbalance["ratio"] >= ratio:
+    # Много покупок снизу → цена пойдёт ВВЕРХ
+    direction = "up"
 
     return {
         "exchange":      exchange,
